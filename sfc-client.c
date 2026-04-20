@@ -1,125 +1,158 @@
 #include "common.h"
 
-int main(int argc,char **argv){
-
-if(argc!=2){
-    printf("usage: %s inputfile\n",argv[0]);
-    return 1;
-}
-
-FILE *fp=fopen(argv[1],"rb");
-if(!fp) die("file");
-
-fseek(fp,0,SEEK_END);
-long flen=ftell(fp);
-rewind(fp);
-
-unsigned char *plain=malloc(flen);
-fread(plain,1,flen,fp);
-fclose(fp);
-
-int fd=socket(AF_INET,SOCK_STREAM,0);
-
-struct sockaddr_in addr;
-addr.sin_family=AF_INET;
-addr.sin_port=htons(PORT);
-inet_pton(AF_INET,"192.168.1.12",&addr.sin_addr);   /* change */
-
-connect(fd,(struct sockaddr*)&addr,sizeof(addr));
-
-printf("Connected.\n");
-
-/* GSS AUTH */
-
-OM_uint32 maj,min;
-gss_ctx_id_t ctx=GSS_C_NO_CONTEXT;
-
-gss_name_t target;
-gss_buffer_desc namebuf;
-
-char service[]="sfc@ssh.local";   /* change host */
-
-namebuf.value=service;
-namebuf.length=strlen(service);
-
-gss_import_name(&min,&namebuf,GSS_C_NT_HOSTBASED_SERVICE,&target);
-
-gss_buffer_desc in=GSS_C_EMPTY_BUFFER;
-gss_buffer_desc out=GSS_C_EMPTY_BUFFER;
-
-do{
-    maj=gss_init_sec_context(
-        &min,
-        GSS_C_NO_CREDENTIAL,
-        &ctx,
-        target,
-        GSS_C_NO_OID,
-        0,
-        0,
-        NULL,
-        &in,
-        NULL,
-        &out,
-        NULL,
-        NULL
-    );
-
-    if(out.length>0){
-        send_token(fd,&out);
-        gss_release_buffer(&min,&out);
+int main(int argc, char **argv)
+{
+    if (argc != 2) {
+        printf("usage: %s inputfile\n", argv[0]);
+        return 1;
     }
 
-    if(maj==GSS_S_CONTINUE_NEEDED)
-        recv_token(fd,&in);
+    FILE *fp = fopen(argv[1], "rb");
+    if (!fp)
+        die("file");
 
-}while(maj==GSS_S_CONTINUE_NEEDED);
+    fseek(fp, 0, SEEK_END);
+    long flen = ftell(fp);
+    rewind(fp);
 
-if(maj!=GSS_S_COMPLETE) die("gss_init_sec_context");
+    unsigned char *plain = malloc(flen);
+    fread(plain, 1, flen, fp);
+    fclose(fp);
 
-printf("Authenticated context established.\n");
+    int fd;
+    struct sockaddr_in addr;
 
-/* derive key */
+    fd = socket(AF_INET, SOCK_STREAM, 0);
 
-unsigned char key[32];
-derive_key(ctx,key);
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, "192.168.1.30", &addr.sin_addr);   // server IP
 
-/* encrypt */
+    connect(fd, (struct sockaddr *)&addr, sizeof(addr));
 
-unsigned char nonce[NONCE_LEN];
-RAND_bytes(nonce,NONCE_LEN);
+    printf("Connected.\n");
 
-unsigned char *cipher=malloc(flen+16);
-unsigned char tag[TAG_LEN];
+    /* =========================
+       PHASE 3 : GSSAPI AUTH
+       ========================= */
 
-EVP_CIPHER_CTX *ectx=EVP_CIPHER_CTX_new();
+    OM_uint32 maj, min;
 
-int len=0,clen=0;
+    gss_ctx_id_t gctx = GSS_C_NO_CONTEXT;
+    gss_name_t target;
 
-EVP_EncryptInit_ex(ectx,EVP_aes_256_gcm(),NULL,NULL,NULL);
-EVP_CIPHER_CTX_ctrl(ectx,EVP_CTRL_GCM_SET_IVLEN,NONCE_LEN,NULL);
-EVP_EncryptInit_ex(ectx,NULL,NULL,key,nonce);
+    gss_buffer_desc namebuf;
+    gss_buffer_desc in = GSS_C_EMPTY_BUFFER;
+    gss_buffer_desc out = GSS_C_EMPTY_BUFFER;
 
-EVP_EncryptUpdate(ectx,cipher,&len,plain,flen);
-clen=len;
+    char service[] = "sfc@server.local";   // change hostname if needed
 
-EVP_EncryptFinal_ex(ectx,cipher+len,&len);
-clen+=len;
+    namebuf.value = service;
+    namebuf.length = strlen(service);
 
-EVP_CIPHER_CTX_ctrl(ectx,EVP_CTRL_GCM_GET_TAG,TAG_LEN,tag);
+    maj = gss_import_name(
+        &min,
+        &namebuf,
+        GSS_C_NT_HOSTBASED_SERVICE,
+        &target
+    );
 
-EVP_CIPHER_CTX_free(ectx);
+    if (maj != GSS_S_COMPLETE)
+        die("gss_import_name");
 
-/* send file */
+    do {
+        maj = gss_init_sec_context(
+            &min,
+            GSS_C_NO_CREDENTIAL,
+            &gctx,
+            target,
+            GSS_C_NO_OID,
+            0,
+            0,
+            NULL,
+            &in,
+            NULL,
+            &out,
+            NULL,
+            NULL
+        );
 
-uint32_t n=htonl(clen);
+        if (out.length > 0) {
+            send_token(fd, &out);
+            gss_release_buffer(&min, &out);
+        }
 
-send_all(fd,&n,4);
-send_all(fd,nonce,NONCE_LEN);
-send_all(fd,cipher,clen);
-send_all(fd,tag,TAG_LEN);
+        if (maj == GSS_S_CONTINUE_NEEDED) {
+            recv_token(fd, &in);
+        }
 
-printf("Encrypted file sent.\n");
+    } while (maj == GSS_S_CONTINUE_NEEDED);
 
-close(fd);
-return 0;
+    if (maj != GSS_S_COMPLETE)
+        die("gss_init_sec_context");
+
+    printf("Authenticated context established.\n");
+
+    /* =========================
+       PHASE 3 KEY DERIVATION
+       ========================= */
+
+    unsigned char key[32];
+
+    derive_key(gctx, key);
+
+    printf("Derived AES key: ");
+    for (int i = 0; i < 8; i++)
+        printf("%02x", key[i]);
+    printf("...\n");
+
+    /* =========================
+       AES-256-GCM ENCRYPTION
+       ========================= */
+
+    unsigned char nonce[NONCE_LEN];
+    RAND_bytes(nonce, NONCE_LEN);
+
+    unsigned char *cipher = malloc(flen + 16);
+    unsigned char tag[TAG_LEN];
+
+    EVP_CIPHER_CTX *ectx = EVP_CIPHER_CTX_new();
+
+    int len = 0;
+    int clen = 0;
+
+    EVP_EncryptInit_ex(ectx, EVP_aes_256_gcm(), NULL, NULL, NULL);
+    EVP_CIPHER_CTX_ctrl(ectx, EVP_CTRL_GCM_SET_IVLEN, NONCE_LEN, NULL);
+    EVP_EncryptInit_ex(ectx, NULL, NULL, key, nonce);
+
+    EVP_EncryptUpdate(ectx, cipher, &len, plain, flen);
+    clen = len;
+
+    EVP_EncryptFinal_ex(ectx, cipher + len, &len);
+    clen += len;
+
+    EVP_CIPHER_CTX_ctrl(ectx, EVP_CTRL_GCM_GET_TAG, TAG_LEN, tag);
+
+    EVP_CIPHER_CTX_free(ectx);
+
+    /* =========================
+       SEND FILE
+       ========================= */
+
+    uint32_t n = htonl(clen);
+
+    printf("Client nonce: ");
+    for (int i = 0; i < NONCE_LEN; i++)
+        printf("%02x", nonce[i]);
+    printf("\n");
+
+    send_all(fd, &n, 4);
+    send_all(fd, nonce, NONCE_LEN);
+    send_all(fd, cipher, clen);
+    send_all(fd, tag, TAG_LEN);
+
+    printf("Encrypted file sent.\n");
+
+    close(fd);
+    return 0;
 }
