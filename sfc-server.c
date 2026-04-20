@@ -53,8 +53,21 @@ printf("Authenticated context established.\n");
 
 /* derive key */
 
+/* SERVER SIDE */
+gss_buffer_desc wrapped_key, unwrapped_key;
+
+// Receive the token sent by the client
+recv_token(cfd, &wrapped_key);
+
+// Unwrap it using the established context
+int conf_state;
+maj = gss_unwrap(&min, ctx, &wrapped_key, &unwrapped_key, &conf_state, NULL);
+if (maj != GSS_S_COMPLETE || conf_state == 0) die("gss_unwrap failed");
+
+// The key is now verified and ready to use
 unsigned char key[32];
-derive_key(ctx,key);
+memcpy(key, unwrapped_key.value, 32);
+gss_release_buffer(&min, &unwrapped_key);
 
 /* receive file */
 
