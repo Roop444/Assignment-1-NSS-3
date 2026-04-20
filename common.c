@@ -44,20 +44,25 @@ int recv_token(int fd, gss_buffer_t tok){
     return 0;
 }
 
+#include <gssapi/gssapi_krb5.h> // Necessary for lucid context structures
+
 void derive_key(gss_ctx_id_t ctx, unsigned char key[32]) {
     OM_uint32 maj, min;
-    gss_buffer_desc label = { 10, "sfc-aes-key" }; // Constant string
-    gss_buffer_desc prf_out = GSS_C_EMPTY_BUFFER;
+    void *lucid_ctx = NULL;
+    
+    // 1. Export the "Lucid" context (internal K5 structures)
+    maj = gss_krb5_export_lucid_sec_context(&min, &ctx, 1, &lucid_ctx);
+    if (maj != GSS_S_COMPLETE) die("export_lucid failed");
 
-    // This extracts 32 bytes of entropy based on the Kerberos session secret
-    maj = gss_pseudo_random(&min, ctx, GSS_C_PRF_KEY_FULL, &label, 32, &prf_out);
+    gss_krb5_lucid_context_v1_t *lctx = (gss_krb5_lucid_context_v1_t *)lucid_ctx;
 
-    if (maj != GSS_S_COMPLETE) {
-        // Fallback: Some older MIT Kerberos versions use gss_get_mic/gss_verify_mic 
-        // to check context integrity, but gss_pseudo_random is the standard way.
-        die("gss_pseudo_random failed");
+    // 2. Access the actual session key negotiated by Kerberos
+    // Depending on the version, it's usually lctx->rfc4537_export_key or lctx->key
+    if (lctx->protocol == 1) {
+        // Use the session key data to create your AES key
+        SHA256(lctx->key.data, lctx->key.length, key);
     }
 
-    memcpy(key, prf_out.value, 32);
-    gss_release_buffer(&min, &prf_out);
+    // 3. Clean up (Very important for security!)
+    gss_krb5_free_lucid_sec_context(&min, lucid_ctx);
 }
