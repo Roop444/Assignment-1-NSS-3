@@ -44,35 +44,20 @@ int recv_token(int fd, gss_buffer_t tok){
     return 0;
 }
 
-void derive_key(gss_ctx_id_t ctx, unsigned char key[32])
-{
+void derive_key(gss_ctx_id_t ctx, unsigned char key[32]) {
     OM_uint32 maj, min;
-    gss_name_t src, tgt;
-    gss_buffer_desc n1 = GSS_C_EMPTY_BUFFER;
-    gss_buffer_desc n2 = GSS_C_EMPTY_BUFFER;
+    gss_buffer_desc label = { 10, "sfc-aes-key" }; // Constant string
+    gss_buffer_desc prf_out = GSS_C_EMPTY_BUFFER;
 
-    maj = gss_inquire_context(
-        &min,
-        ctx,
-        &src,
-        &tgt,
-        NULL,NULL,NULL,NULL,NULL
-    );
+    // This extracts 32 bytes of entropy based on the Kerberos session secret
+    maj = gss_pseudo_random(&min, ctx, GSS_C_PRF_KEY_FULL, &label, 32, &prf_out);
 
-    if (maj != GSS_S_COMPLETE)
-        die("gss_inquire_context");
+    if (maj != GSS_S_COMPLETE) {
+        // Fallback: Some older MIT Kerberos versions use gss_get_mic/gss_verify_mic 
+        // to check context integrity, but gss_pseudo_random is the standard way.
+        die("gss_pseudo_random failed");
+    }
 
-    gss_display_name(&min, src, &n1, NULL);
-    gss_display_name(&min, tgt, &n2, NULL);
-
-    char buf[512];
-
-    snprintf(buf, sizeof(buf), "%.*s|%.*s",
-        (int)n1.length, (char*)n1.value,
-        (int)n2.length, (char*)n2.value);
-
-    SHA256((unsigned char*)buf, strlen(buf), key);
-
-    gss_release_buffer(&min,&n1);
-    gss_release_buffer(&min,&n2);
+    memcpy(key, prf_out.value, 32);
+    gss_release_buffer(&min, &prf_out);
 }
