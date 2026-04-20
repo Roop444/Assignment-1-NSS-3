@@ -1,3 +1,6 @@
+/* =========================
+   sfc-client.c
+   ========================= */
 #include "common.h"
 
 int main(int argc, char **argv)
@@ -19,22 +22,19 @@ int main(int argc, char **argv)
     fread(plain, 1, flen, fp);
     fclose(fp);
 
-    int fd;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
     struct sockaddr_in addr;
-
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-
     addr.sin_family = AF_INET;
     addr.sin_port = htons(PORT);
-    inet_pton(AF_INET, "192.168.1.30", &addr.sin_addr);   // server IP
+
+    inet_pton(AF_INET, "192.168.1.30", &addr.sin_addr); /* server IP */
 
     connect(fd, (struct sockaddr *)&addr, sizeof(addr));
 
     printf("Connected.\n");
 
-    /* =========================
-       PHASE 3 : GSSAPI AUTH
-       ========================= */
+    /* ================= GSS AUTH ================= */
 
     OM_uint32 maj, min;
 
@@ -45,7 +45,7 @@ int main(int argc, char **argv)
     gss_buffer_desc in = GSS_C_EMPTY_BUFFER;
     gss_buffer_desc out = GSS_C_EMPTY_BUFFER;
 
-    char service[] = "sfc@server";   // change hostname if needed
+    char service[] = "sfc@server";
 
     namebuf.value = service;
     namebuf.length = strlen(service);
@@ -58,9 +58,10 @@ int main(int argc, char **argv)
     );
 
     if (maj != GSS_S_COMPLETE)
-        die("gss_import_name");
+        gss_die("gss_import_name", maj, min);
 
     do {
+
         maj = gss_init_sec_context(
             &min,
             GSS_C_NO_CREDENTIAL,
@@ -89,13 +90,11 @@ int main(int argc, char **argv)
     } while (maj == GSS_S_CONTINUE_NEEDED);
 
     if (maj != GSS_S_COMPLETE)
-        die("gss_init_sec_context");
+        gss_die("gss_init_sec_context", maj, min);
 
     printf("Authenticated context established.\n");
 
-    /* =========================
-       PHASE 3 KEY DERIVATION
-       ========================= */
+    /* ================= KEY ================= */
 
     unsigned char key[32];
 
@@ -106,9 +105,7 @@ int main(int argc, char **argv)
         printf("%02x", key[i]);
     printf("...\n");
 
-    /* =========================
-       AES-256-GCM ENCRYPTION
-       ========================= */
+    /* ================= AES GCM ================= */
 
     unsigned char nonce[NONCE_LEN];
     RAND_bytes(nonce, NONCE_LEN);
@@ -134,10 +131,6 @@ int main(int argc, char **argv)
     EVP_CIPHER_CTX_ctrl(ectx, EVP_CTRL_GCM_GET_TAG, TAG_LEN, tag);
 
     EVP_CIPHER_CTX_free(ectx);
-
-    /* =========================
-       SEND FILE
-       ========================= */
 
     uint32_t n = htonl(clen);
 
