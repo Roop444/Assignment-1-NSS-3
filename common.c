@@ -73,26 +73,46 @@ void derive_key(gss_ctx_id_t ctx, unsigned char key[32])
 {
     OM_uint32 maj, min;
 
-    gss_buffer_desc in;
-    gss_buffer_desc mic = GSS_C_EMPTY_BUFFER;
+    gss_name_t src, tgt;
+    gss_buffer_desc n1 = GSS_C_EMPTY_BUFFER;
+    gss_buffer_desc n2 = GSS_C_EMPTY_BUFFER;
 
-    char label[] = "SFC_SESSION_KEY";
-
-    in.value = label;
-    in.length = strlen(label);
-
-    maj = gss_get_mic(
+    maj = gss_inquire_context(
         &min,
         ctx,
-        GSS_C_QOP_DEFAULT,
-        &in,
-        &mic
+        &src,
+        &tgt,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
     );
 
     if (maj != GSS_S_COMPLETE)
-        gss_die("gss_get_mic", maj, min);
+        gss_die("gss_inquire_context", maj, min);
 
-    SHA256((unsigned char *)mic.value, mic.length, key);
+    gss_display_name(&min, src, &n1, NULL);
+    gss_display_name(&min, tgt, &n2, NULL);
 
-    gss_release_buffer(&min, &mic);
+    char a[256], b[256];
+
+    snprintf(a, sizeof(a), "%.*s",
+        (int)n1.length, (char *)n1.value);
+
+    snprintf(b, sizeof(b), "%.*s",
+        (int)n2.length, (char *)n2.value);
+
+    /* force same order both sides */
+    char buf[600];
+
+    if (strcmp(a, b) < 0)
+        snprintf(buf, sizeof(buf), "%s|%s|SFCv1", a, b);
+    else
+        snprintf(buf, sizeof(buf), "%s|%s|SFCv1", b, a);
+
+    SHA256((unsigned char *)buf, strlen(buf), key);
+
+    gss_release_buffer(&min, &n1);
+    gss_release_buffer(&min, &n2);
 }
