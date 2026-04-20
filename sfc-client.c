@@ -45,7 +45,7 @@ int main(int argc, char **argv)
     gss_buffer_desc in = GSS_C_EMPTY_BUFFER;
     gss_buffer_desc out = GSS_C_EMPTY_BUFFER;
 
-    char service[] = "sfc@server.local";   // change hostname if needed
+    char service[] = "sfc@server";   // change hostname if needed
 
     namebuf.value = service;
     namebuf.length = strlen(service);
