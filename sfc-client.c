@@ -97,14 +97,21 @@ int main(int argc, char **argv)
        PHASE 3 KEY DERIVATION
        ========================= */
 
+    /* CLIENT SIDE */
     unsigned char key[32];
-
-    derive_key(gctx, key);
-
-    printf("Derived AES key: ");
-    for (int i = 0; i < 8; i++)
-        printf("%02x", key[i]);
-    printf("...\n");
+    RAND_bytes(key, 32); // Generate a fresh random file key
+    
+    gss_buffer_desc key_to_wrap, wrapped_key;
+    key_to_wrap.value = key;
+    key_to_wrap.length = 32;
+    
+    // Wrap the key using the Kerberos context (this provides confidentiality)
+    maj = gss_wrap(&min, gctx, 1, GSS_C_QOP_DEFAULT, &key_to_wrap, NULL, &wrapped_key);
+    if (maj != GSS_S_COMPLETE) die("gss_wrap failed");
+    
+    // Send the wrapped key to the server
+    send_token(fd, &wrapped_key);
+    gss_release_buffer(&min, &wrapped_key);
 
     /* =========================
        AES-256-GCM ENCRYPTION
