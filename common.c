@@ -44,14 +44,35 @@ int recv_token(int fd, gss_buffer_t tok){
     return 0;
 }
 
-void derive_key(gss_ctx_id_t ctx, unsigned char key[32]){
-    OM_uint32 maj,min;
-    gss_buffer_desc buf=GSS_C_EMPTY_BUFFER;
+void derive_key(gss_ctx_id_t ctx, unsigned char key[32])
+{
+    OM_uint32 maj, min;
+    gss_name_t src, tgt;
+    gss_buffer_desc n1 = GSS_C_EMPTY_BUFFER;
+    gss_buffer_desc n2 = GSS_C_EMPTY_BUFFER;
 
-    maj = gss_export_sec_context(&min,&ctx,&buf);
-    if(maj!=GSS_S_COMPLETE) die("gss_export_sec_context");
+    maj = gss_inquire_context(
+        &min,
+        ctx,
+        &src,
+        &tgt,
+        NULL,NULL,NULL,NULL,NULL
+    );
 
-    SHA256((unsigned char*)buf.value, buf.length, key);
+    if (maj != GSS_S_COMPLETE)
+        die("gss_inquire_context");
 
-    gss_release_buffer(&min,&buf);
+    gss_display_name(&min, src, &n1, NULL);
+    gss_display_name(&min, tgt, &n2, NULL);
+
+    char buf[512];
+
+    snprintf(buf, sizeof(buf), "%.*s|%.*s",
+        (int)n1.length, (char*)n1.value,
+        (int)n2.length, (char*)n2.value);
+
+    SHA256((unsigned char*)buf, strlen(buf), key);
+
+    gss_release_buffer(&min,&n1);
+    gss_release_buffer(&min,&n2);
 }
